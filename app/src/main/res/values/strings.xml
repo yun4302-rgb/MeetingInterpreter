@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">실시간 통역 회의록</string>
+    <string name="notification_channel">회의 통역 및 기록</string>
+    <string name="notification_channel_description">화면이 꺼져도 회의 통역과 기록을 계속합니다.</string>
+</resources>
