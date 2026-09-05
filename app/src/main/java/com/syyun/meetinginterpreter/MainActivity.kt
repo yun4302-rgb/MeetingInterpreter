@@ -19,6 +19,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -107,12 +108,23 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applySystemBarInsets()
         bindViews()
         setupLanguageSpinner()
         restoreState()
         setupActions()
         renderEntries()
         setControls(MeetingStore.sessionState(this))
+    }
+
+    private fun applySystemBarInsets() {
+        val root = findViewById<View>(R.id.appRoot)
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val systemBars = insets.getInsets(WindowInsets.Type.systemBars())
+            view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            insets
+        }
+        root.requestApplyInsets()
     }
 
     override fun onStart() {
