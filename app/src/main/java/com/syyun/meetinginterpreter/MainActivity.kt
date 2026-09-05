@@ -15,6 +15,8 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -25,6 +27,11 @@ import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.Translator
+import com.google.mlkit.nl.translate.TranslatorOptions
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -36,6 +43,8 @@ class MainActivity : Activity() {
     private lateinit var meetingPlace: EditText
     private lateinit var meetingTime: EditText
     private lateinit var languageSpinner: Spinner
+    private lateinit var languagePackStatusText: TextView
+    private lateinit var downloadLanguagePackButton: Button
     private lateinit var companyContainer: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var statusHint: TextView
@@ -67,6 +76,8 @@ class MainActivity : Activity() {
     )
 
     private var pendingStart = false
+    private var packRecognizer: SpeechRecognizer? = null
+    private var packTranslator: Translator? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -124,6 +135,8 @@ class MainActivity : Activity() {
         meetingPlace = findViewById(R.id.meetingPlace)
         meetingTime = findViewById(R.id.meetingTime)
         languageSpinner = findViewById(R.id.languageSpinner)
+        languagePackStatusText = findViewById(R.id.languagePackStatusText)
+        downloadLanguagePackButton = findViewById(R.id.downloadLanguagePackButton)
         companyContainer = findViewById(R.id.companyContainer)
         statusText = findViewById(R.id.statusText)
         statusHint = findViewById(R.id.statusHint)
@@ -155,6 +168,11 @@ class MainActivity : Activity() {
                 translationCard.visibility = if (korean) View.GONE else View.VISIBLE
                 startButton.text = if (korean) "●  회의록 기록 시작" else "●  통역·기록 시작"
                 transcriptTitle.text = if (korean) "한국어 음성 인식" else "${languages[position].label.substringBefore(" →")} 음성 인식"
+                languagePackStatusText.text = if (korean) {
+                    "한국어 음성 인식팩을 기기에 미리 설치합니다."
+                } else {
+                    "${languages[position].label}: 음성 인식팩과 한국어 번역팩을 설치합니다."
+                }
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
@@ -164,6 +182,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.addCompanyButton).setOnClickListener { addCompanyRow("", "") }
         findViewById<Button>(R.id.clearButton).setOnClickListener { confirmClear() }
         meetingTime.setOnClickListener { chooseDateTime() }
+        downloadLanguagePackButton.setOnClickListener { downloadSelectedLanguagePack() }
         startButton.setOnClickListener { requestStart() }
         pauseButton.setOnClickListener {
             val state = MeetingStore.sessionState(this)
@@ -177,6 +196,78 @@ class MainActivity : Activity() {
             createSummary()
         }
         downloadButton.setOnClickListener { exportWord() }
+    }
+
+    private fun downloadSelectedLanguagePack() {
+        val selected = languages[languageSpinner.selectedItemPosition]
+        downloadLanguagePackButton.isEnabled = false
+        languagePackStatusText.text = "${selected.label}: 음성 인식팩 확인 중…"
+
+        if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            languagePackStatusText.text = "이 휴대폰은 Android 온디바이스 음성 인식을 지원하지 않습니다."
+            downloadLanguagePackButton.isEnabled = true
+            return
+        }
+
+        packRecognizer?.destroy()
+        packRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        if (Build.VERSION.SDK_INT >= 33) {
+            runCatching { packRecognizer?.triggerModelDownload(languagePackIntent(selected.tag)) }
+                .onFailure {
+                    languagePackStatusText.text = "음성팩 요청 실패: ${it.localizedMessage ?: "휴대폰 음성 설정을 확인하세요"}"
+                }
+        }
+
+        if (selected.tag == "ko-KR") {
+            languagePackStatusText.text = if (Build.VERSION.SDK_INT >= 33) {
+                "한국어 음성 인식팩 다운로드를 요청했습니다. 시스템 안내를 완료해 주세요."
+            } else {
+                "Android 12에서는 휴대폰 설정의 음성 입력 메뉴에서 한국어팩을 설치해 주세요."
+            }
+            downloadLanguagePackButton.isEnabled = true
+            return
+        }
+
+        val source = TranslateLanguage.fromLanguageTag(selected.tag.substringBefore('-'))
+        if (source == null) {
+            languagePackStatusText.text = "선택한 번역 언어는 지원되지 않습니다."
+            downloadLanguagePackButton.isEnabled = true
+            return
+        }
+
+        packTranslator?.close()
+        packTranslator = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(source)
+                .setTargetLanguage(TranslateLanguage.KOREAN)
+                .build()
+        )
+        languagePackStatusText.text = "${selected.label}: 번역팩 다운로드 중… 앱을 닫지 마세요."
+        packTranslator?.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            ?.addOnSuccessListener {
+                languagePackStatusText.text = "✓ 번역팩 준비 완료 · 음성팩 시스템 다운로드 요청 완료"
+                downloadLanguagePackButton.isEnabled = true
+                Toast.makeText(this, "${selected.label} 언어팩 준비가 완료되었습니다.", Toast.LENGTH_LONG).show()
+            }
+            ?.addOnFailureListener { error ->
+                languagePackStatusText.text = "번역팩 다운로드 실패: ${error.localizedMessage ?: "인터넷 연결을 확인하세요"}"
+                downloadLanguagePackButton.isEnabled = true
+            }
+    }
+
+    private fun languagePackIntent(languageTag: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+    }
+
+    override fun onDestroy() {
+        packRecognizer?.destroy()
+        packRecognizer = null
+        packTranslator?.close()
+        packTranslator = null
+        super.onDestroy()
     }
 
     private fun requestStart() {
